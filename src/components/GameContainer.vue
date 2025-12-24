@@ -11,6 +11,10 @@
       <span class="castle-icon">🏰</span>
     </div>
 
+    <div v-if="showWaveIntro" class="wave-intro-overlay">
+      <div class="wave-intro-box">第 {{ currentWave }} 波 即將開始</div>
+    </div>
+
     <Enemy
       v-for="enemy in enemies"
       :key="enemy.id"
@@ -124,6 +128,9 @@ const waveStartTime = ref(0);
 const spawnIndex = ref(0);
 const gameStarted = ref(false);
 const gameMode = ref("BUILD");
+const WAVE_INTRO_DURATION = 3000;
+const showWaveIntro = ref(false);
+let waveIntroTimer = null;
 
 const castleStyle = computed(() => {
   const endPoint = ENEMY_PATH[ENEMY_PATH.length - 1];
@@ -192,9 +199,17 @@ function startNextWave(currentTimeStamp) {
     return;
   }
   currentWave.value++;
-  waveStartTime.value = currentTimeStamp;
+  showWaveIntro.value = true;
+  gameStarted.value = false;
+  waveStartTime.value = currentTimeStamp + WAVE_INTRO_DURATION;
   spawnIndex.value = 0;
-  gameStarted.value = true;
+
+  if (waveIntroTimer) clearTimeout(waveIntroTimer);
+  waveIntroTimer = setTimeout(() => {
+    showWaveIntro.value = false;
+    gameStarted.value = true;
+    waveIntroTimer = null;
+  }, WAVE_INTRO_DURATION);
   console.log(`--- 開始波次 ${currentWave.value} ---`);
 }
 
@@ -467,6 +482,10 @@ function restartGame() {
   isPaused.value = false;
   isVictory.value = false;
   lastTime = 0;
+  if (waveIntroTimer) {
+    clearTimeout(waveIntroTimer);
+    waveIntroTimer = null;
+  }
 
   startGameLoop();
 }
@@ -482,6 +501,10 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   stopGameLoop();
+  if (waveIntroTimer) {
+    clearTimeout(waveIntroTimer);
+    waveIntroTimer = null;
+  }
 });
 </script>
 
@@ -537,5 +560,29 @@ onBeforeUnmount(() => {
 @keyframes breathe {
   0%, 100% { transform: scale(1); }
   50% { transform: scale(1.1); }
+}
+
+.wave-intro-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: rgba(0,0,0,0.7);
+  z-index: 25000;
+}
+
+.wave-intro-box {
+  color: #fff;
+  font-size: 48px;
+  font-weight: 800;
+  padding: 24px 40px;
+  border-radius: 12px;
+  background: rgba(0,0,0,0.5);
+  border: 3px solid gold;
+  box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
 }
 </style>
