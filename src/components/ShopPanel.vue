@@ -27,6 +27,25 @@
       </div>
     </div>
 
+    <div style="margin-top: 12px">
+      <button
+        class="upgrade-castle-btn"
+        @click="handleUpgradeCastle"
+        :disabled="currentGold < 100"
+        title="花費 100 金 增加主堡生命上限 +5"
+      >
+        強化主堡 100 💰
+      </button>
+        <button
+          class="heal-castle-btn"
+          @click="handleHealCastle"
+          :disabled="currentGold < 50 || isPaused"
+          title="花費 50 金 回復主堡生命 +2"
+        >
+          回復主堡 50 💰
+        </button>
+    </div>
+
     <button @click="emit('togglePause')" class="pause-button">
       {{ isPaused ? "繼續遊戲" : "暫停遊戲" }}
     </button>
@@ -43,7 +62,7 @@ const props = defineProps({
   isPaused: { type: Boolean, required: true },
 });
 
-const emit = defineEmits(["select", "togglePause"]);
+const emit = defineEmits(["select", "togglePause", "upgrade-castle", "heal-castle"]);
 
 const availableTowers = computed(() => {
   return Object.values(TOWER_CONFIGS).filter(
@@ -54,6 +73,18 @@ const availableTowers = computed(() => {
 function selectTower(config) {
   if (props.currentGold >= config.price && !props.isPaused) {
     emit("select", config);
+  }
+}
+
+function handleUpgradeCastle() {
+  if (props.currentGold >= 100 && !props.isPaused) {
+    emit('upgrade-castle');
+  }
+}
+
+function handleHealCastle() {
+  if (props.currentGold >= 50 && !props.isPaused) {
+    emit('heal-castle');
   }
 }
 </script>
@@ -144,5 +175,39 @@ h3 {
 
 .pause-button:hover {
   background-color: #1976d2;
+}
+
+.upgrade-castle-btn {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 8px;
+  background: linear-gradient(180deg,#c18700,#a56f00);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+}
+.upgrade-castle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.heal-castle-btn {
+  display: block;
+  width: 100%;
+  padding: 8px;
+  margin-bottom: 8px;
+  background: linear-gradient(180deg,#4caf50,#388e3c);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-weight: bold;
+  cursor: pointer;
+}
+.heal-castle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>

@@ -50,15 +50,16 @@
       :isPaused="isPaused"
       @select="handleSelectTower"
       @togglePause="togglePause"
+      @upgrade-castle="upgradeCastle"
+      @heal-castle="healCastle"
     />
 
     <div class="game-ui">
-      金錢: {{ currentGold }} | 波次: {{ currentWave }} /
-      {{ WAVE_CONFIGS.length }} | 敵人剩餘: {{ enemies.length }} |
+      金錢: {{ currentGold }} | 波次: {{ currentWave }} | 敵人剩餘: {{ enemies.length }} |
 
       <PlayerHealthBar
         :current="playerHealth"
-        :max="20"
+        :max="playerMaxHealth"
         style="display: inline-block; margin-left: 20px"
       />
 
@@ -101,12 +102,14 @@ import {
 } from "../data/GameMapData";
 import { TOWER_CONFIGS } from "../data/TowerConfigs";
 import { ENEMY_TYPES, WAVE_CONFIGS } from "../data/WaveData";
+import { generateRandomWave } from "../systems/WaveManager";
 import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 
 const enemies = ref([]);
 const placedTowers = ref([]);
 const projectiles = ref([]);
 const playerHealth = ref(20);
+const playerMaxHealth = ref(20);
 const gameOver = ref(false);
 const isPaused = ref(false);
 const isVictory = ref(false);
@@ -131,6 +134,8 @@ const gameMode = ref("BUILD");
 const WAVE_INTRO_DURATION = 3000;
 const showWaveIntro = ref(false);
 let waveIntroTimer = null;
+const PROJECTILE_RETARGET_RADIUS = 120; // 像素，子彈若失去目標則在此範圍內嘗試重新鎖定
+const currentWaveConfig = ref(null);
 
 const castleStyle = computed(() => {
   const endPoint = ENEMY_PATH[ENEMY_PATH.length - 1];
@@ -154,6 +159,7 @@ const castleStyle = computed(() => {
 
 let lastTime = 0;
 let animationFrameId = null;
+let projectileIdCounter = 1;
 
 function startGameLoop() {
   if (animationFrameId === null) {
@@ -173,13 +179,16 @@ function distance(p1, p2) {
   return Math.sqrt(Math.pow(p2.x - p1.x, 2) + Math.pow(p2.y - p1.y, 2));
 }
 
-function spawnEnemy(enemyType, currentTimeStamp) {
+function spawnEnemy(enemyType, currentTimeStamp, multiplier = 1) {
   const config = ENEMY_TYPES[enemyType];
   const initialPosition = ENEMY_PATH[0];
+
+  const health = Math.max(1, Math.round(config.health * multiplier));
+
   const newEnemy = {
     id: currentTimeStamp + Math.random(),
-    health: config.health,
-    maxHealth: config.health,
+    health: health,
+    maxHealth: health,
     speed: config.speed,
     bounty: config.bounty,
     config: config,
@@ -188,19 +197,15 @@ function spawnEnemy(enemyType, currentTimeStamp) {
     active: true,
   };
   enemies.value.push(newEnemy);
-  console.log(`[Wave ${currentWave.value}] 生成了 ${config.name}`);
+  console.log(`[Wave ${currentWave.value}] 生成了 ${config.name} (HP x${multiplier})`);
 }
 
 function startNextWave(currentTimeStamp) {
-  if (currentWave.value >= WAVE_CONFIGS.length) {
-    console.log("所有波次已完成！遊戲勝利！");
-    gameOver.value = true;
-    isVictory.value = true;
-    return;
-  }
+  // 產生無限且隨機的波次設定
   currentWave.value++;
   showWaveIntro.value = true;
   gameStarted.value = false;
+  currentWaveConfig.value = generateRandomWave(currentWave.value);
   waveStartTime.value = currentTimeStamp + WAVE_INTRO_DURATION;
   spawnIndex.value = 0;
 
@@ -237,14 +242,14 @@ function updateGame(timestamp) {
   }
 
   if (gameStarted.value && currentWave.value > 0) {
-    const wave = WAVE_CONFIGS[currentWave.value - 1];
+    const wave = currentWaveConfig.value || WAVE_CONFIGS[Math.max(0, currentWave.value - 1)];
     const timeSinceStart = elapsed - waveStartTime.value;
 
     if (spawnIndex.value < wave.spawns.length) {
       const nextSpawn = wave.spawns[spawnIndex.value];
 
       if (timeSinceStart >= nextSpawn.delay) {
-        spawnEnemy(nextSpawn.type, elapsed);
+        spawnEnemy(nextSpawn.type, elapsed, nextSpawn.multiplier || 1);
         spawnIndex.value++;
       }
     } else {
@@ -288,45 +293,92 @@ function updateGame(timestamp) {
   });
 
   projectiles.value.forEach(p => {
-    if (!p.targetId) {
-      p.active = false;
-      return;
-    }
+    // 嘗試找到目前仍存在且活躍的目標敵人
+    let targetEnemy = enemies.value.find(e => e.id === p.targetId && e.active);
 
-    const targetX = p.targetPos.x;
-    const targetY = p.targetPos.y;
-
-    const dx = targetX - p.position.x;
-    const dy = targetY - p.position.y;
-    const dist = distance({ x: dx, y: dy }, { x: 0, y: 0 });
-
-    const moveDistance = p.speed * deltaTime;
-
-    if (dist <= moveDistance) {
-      p.position.x = targetX;
-      p.position.y = targetY;
-      p.active = false;
-
-      const hitEnemy = enemies.value.find(e => e.id === p.targetId);
-
-      if (hitEnemy && hitEnemy.active) {
-        hitEnemy.health -= p.damage;
-
-        if (hitEnemy.health <= 0) {
-          hitEnemy.active = false;
-          handleEnemyDefeated(hitEnemy);
+    // 若原目標不存在，嘗試在臨近範圍內重新鎖定最近的敵人
+    if (!targetEnemy) {
+      let nearest = null;
+      let nearestDist = Infinity;
+      for (const e of enemies.value) {
+        if (!e.active) continue;
+        const dx = e.position.x - p.position.x;
+        const dy = e.position.y - p.position.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        if (d < nearestDist) {
+          nearestDist = d;
+          nearest = e;
         }
       }
-    } else {
-      if (dist > 0) {
-        const normalizedDx = dx / dist;
-        const normalizedDy = dy / dist;
 
-        p.position.x += normalizedDx * moveDistance;
-        p.position.y += normalizedDy * moveDistance;
+      if (nearest && nearestDist <= PROJECTILE_RETARGET_RADIUS) {
+        targetEnemy = nearest;
+        p.targetId = nearest.id;
+        p.targetPos = { x: nearest.position.x, y: nearest.position.y };
+      }
+    }
+
+    // 若有活躍目標：以目標的即時位置來計算移動與碰撞
+    if (targetEnemy) {
+      const targetX = targetEnemy.position.x;
+      const targetY = targetEnemy.position.y;
+
+      const dx = targetX - p.position.x;
+      const dy = targetY - p.position.y;
+      const distToTarget = Math.sqrt(dx * dx + dy * dy);
+
+      const moveDistance = p.speed * deltaTime;
+
+      // 碰撞判定使用敵人尺寸與子彈尺寸作為半徑
+      const enemyRadius = (targetEnemy.config && targetEnemy.config.size) ? targetEnemy.config.size / 2 : 10;
+      const projRadius = (p.size || 6) / 2;
+
+      if (distToTarget <= enemyRadius + projRadius) {
+        // 命中
+        p.position.x = targetX;
+        p.position.y = targetY;
+        p.active = false;
+        targetEnemy.health -= p.damage;
+
+        if (targetEnemy.health <= 0) {
+          targetEnemy.active = false;
+          handleEnemyDefeated(targetEnemy);
+        }
+      } else {
+        if (distToTarget > 0) {
+          const nx = dx / distToTarget;
+          const ny = dy / distToTarget;
+          p.position.x += nx * moveDistance;
+          p.position.y += ny * moveDistance;
+        } else {
+          p.active = false;
+        }
+      }
+    } else if (p.targetPos) {
+      // 目標已不存在（被擊殺或移除），退回到原先的 targetPos 行為作為後備
+      const targetX = p.targetPos.x;
+      const targetY = p.targetPos.y;
+
+      const dx = targetX - p.position.x;
+      const dy = targetY - p.position.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const moveDistance = p.speed * deltaTime;
+
+      if (dist <= moveDistance) {
+        p.position.x = targetX;
+        p.position.y = targetY;
+        p.active = false;
+      } else if (dist > 0) {
+        const nx = dx / dist;
+        const ny = dy / dist;
+        p.position.x += nx * moveDistance;
+        p.position.y += ny * moveDistance;
       } else {
         p.active = false;
       }
+    } else {
+      // 無目標也無目標位置 => 移除子彈
+      p.active = false;
     }
   });
 
@@ -350,6 +402,18 @@ function updateGame(timestamp) {
     });
 
     if (targetEnemy) {
+      // 檢查現有在途子彈對該目標的累積傷害
+      const pendingDamage = projectiles.value.reduce((sum, pj) => {
+        if (!pj.active) return sum;
+        if (pj.targetId === targetEnemy.id) return sum + (pj.damage || 0);
+        return sum;
+      }, 0);
+
+      // 若在途傷害已足以擊倒敵人，則跳過發射
+      if (pendingDamage >= targetEnemy.health) {
+        return; // 跳到下一座塔
+      }
+
       tower.lastAttackTime = elapsed;
 
       const dx = targetEnemy.position.x - towerX;
@@ -370,7 +434,7 @@ function updateGame(timestamp) {
 
       if (distToEnemy > 5) {
         projectiles.value.push({
-          id: Date.now() + Math.random(),
+          id: projectileIdCounter++,
           targetId: targetEnemy.id,
           targetPos: { x: targetEnemy.position.x, y: targetEnemy.position.y },
           speed: tower.config.projectileSpeed,
@@ -387,7 +451,6 @@ function updateGame(timestamp) {
 
   enemies.value = enemies.value.filter((enemy) => enemy.active);
   projectiles.value = projectiles.value.filter(p => p.active !== false);
-
   animationFrameId = requestAnimationFrame(updateGame);
 }
 
@@ -455,6 +518,37 @@ function handleEnemyLeaked(enemy) {
   }
 }
 
+const CASTLE_UPGRADE_COST = 100;
+const CASTLE_UPGRADE_AMOUNT = 5;
+
+function upgradeCastle() {
+  if (gameOver.value) return;
+  if (currentGold.value < CASTLE_UPGRADE_COST) {
+    console.log('金錢不足，無法強化主堡。');
+    return;
+  }
+
+  currentGold.value -= CASTLE_UPGRADE_COST;
+  playerMaxHealth.value += CASTLE_UPGRADE_AMOUNT;
+  // 同步回復部分生命
+  playerHealth.value = Math.min(playerMaxHealth.value, playerHealth.value + CASTLE_UPGRADE_AMOUNT);
+
+  console.log(`已花費 ${CASTLE_UPGRADE_COST} 金 強化主堡，最大生命 +${CASTLE_UPGRADE_AMOUNT}`);
+}
+
+const CASTLE_HEAL_COST = 50;
+const CASTLE_HEAL_AMOUNT = 2;
+
+function healCastle() {
+  if (gameOver.value) return;
+  if (currentGold.value < CASTLE_HEAL_COST) return;
+
+  currentGold.value -= CASTLE_HEAL_COST;
+  playerHealth.value = Math.min(playerMaxHealth.value, playerHealth.value + CASTLE_HEAL_AMOUNT);
+
+  console.log(`已花費 ${CASTLE_HEAL_COST} 金 回復主堡生命 +${CASTLE_HEAL_AMOUNT}`);
+}
+
 function togglePause() {
   if (gameOver.value) return;
 
@@ -478,6 +572,7 @@ function restartGame() {
   waveStartTime.value = 0;
   gameStarted.value = false;
   playerHealth.value = 20;
+  playerMaxHealth.value = 20;
   gameOver.value = false;
   isPaused.value = false;
   isVictory.value = false;
@@ -486,6 +581,7 @@ function restartGame() {
     clearTimeout(waveIntroTimer);
     waveIntroTimer = null;
   }
+  projectileIdCounter = 1;
 
   startGameLoop();
 }
@@ -584,5 +680,20 @@ onBeforeUnmount(() => {
   background: rgba(0,0,0,0.5);
   border: 3px solid gold;
   box-shadow: 0 0 30px rgba(255, 215, 0, 0.2);
+}
+
+.castle-upgrade-btn {
+  margin-left: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: none;
+  background-color: #b8860b;
+  color: white;
+  font-weight: bold;
+  cursor: pointer;
+}
+.castle-upgrade-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 </style>
