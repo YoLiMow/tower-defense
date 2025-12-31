@@ -162,7 +162,7 @@ h3 {
 }
 
 .pause-button {
-  margin-top: auto; /* 將按鈕推到底部 */
+  margin-top: auto;
   padding: 10px;
   background-color: #2196f3;
   color: white;

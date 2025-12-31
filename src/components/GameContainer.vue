@@ -134,7 +134,7 @@ const gameMode = ref("BUILD");
 const WAVE_INTRO_DURATION = 3000;
 const showWaveIntro = ref(false);
 let waveIntroTimer = null;
-const PROJECTILE_RETARGET_RADIUS = 120; // 像素，子彈若失去目標則在此範圍內嘗試重新鎖定
+const PROJECTILE_RETARGET_RADIUS = 120;
 const currentWaveConfig = ref(null);
 
 const castleStyle = computed(() => {
@@ -201,7 +201,6 @@ function spawnEnemy(enemyType, currentTimeStamp, multiplier = 1) {
 }
 
 function startNextWave(currentTimeStamp) {
-  // 產生無限且隨機的波次設定
   currentWave.value++;
   showWaveIntro.value = true;
   gameStarted.value = false;
@@ -293,10 +292,8 @@ function updateGame(timestamp) {
   });
 
   projectiles.value.forEach(p => {
-    // 嘗試找到目前仍存在且活躍的目標敵人
     let targetEnemy = enemies.value.find(e => e.id === p.targetId && e.active);
 
-    // 若原目標不存在，嘗試在臨近範圍內重新鎖定最近的敵人
     if (!targetEnemy) {
       let nearest = null;
       let nearestDist = Infinity;
@@ -318,7 +315,6 @@ function updateGame(timestamp) {
       }
     }
 
-    // 若有活躍目標：以目標的即時位置來計算移動與碰撞
     if (targetEnemy) {
       const targetX = targetEnemy.position.x;
       const targetY = targetEnemy.position.y;
@@ -329,12 +325,10 @@ function updateGame(timestamp) {
 
       const moveDistance = p.speed * deltaTime;
 
-      // 碰撞判定使用敵人尺寸與子彈尺寸作為半徑
       const enemyRadius = (targetEnemy.config && targetEnemy.config.size) ? targetEnemy.config.size / 2 : 10;
       const projRadius = (p.size || 6) / 2;
 
       if (distToTarget <= enemyRadius + projRadius) {
-        // 命中
         p.position.x = targetX;
         p.position.y = targetY;
         p.active = false;
@@ -355,7 +349,6 @@ function updateGame(timestamp) {
         }
       }
     } else if (p.targetPos) {
-      // 目標已不存在（被擊殺或移除），退回到原先的 targetPos 行為作為後備
       const targetX = p.targetPos.x;
       const targetY = p.targetPos.y;
 
@@ -377,7 +370,6 @@ function updateGame(timestamp) {
         p.active = false;
       }
     } else {
-      // 無目標也無目標位置 => 移除子彈
       p.active = false;
     }
   });
@@ -390,28 +382,32 @@ function updateGame(timestamp) {
 
     const towerX = tower.col * TILE_SIZE + TILE_SIZE / 2;
     const towerY = tower.row * TILE_SIZE + TILE_SIZE / 2;
-    const targetEnemy = enemies.value.find((enemy) => {
+
+    const endPoint = ENEMY_PATH[ENEMY_PATH.length - 1];
+    const candidates = enemies.value.filter((enemy) => {
       if (!enemy.active) return false;
-
-      const dist = distance(
-        { x: towerX, y: towerY },
-        enemy.position
-      );
-
+      const dist = distance({ x: towerX, y: towerY }, enemy.position);
       return dist <= tower.config.pixelRange;
     });
 
+    let targetEnemy = null;
+    if (candidates.length > 0) {
+      targetEnemy = candidates.reduce((best, e) => {
+        const d = distance(e.position, { x: endPoint.x, y: endPoint.y });
+        if (!best) return { enemy: e, d };
+        return d < best.d ? { enemy: e, d } : best;
+      }, null).enemy;
+    }
+
     if (targetEnemy) {
-      // 檢查現有在途子彈對該目標的累積傷害
       const pendingDamage = projectiles.value.reduce((sum, pj) => {
         if (!pj.active) return sum;
         if (pj.targetId === targetEnemy.id) return sum + (pj.damage || 0);
         return sum;
       }, 0);
 
-      // 若在途傷害已足以擊倒敵人，則跳過發射
       if (pendingDamage >= targetEnemy.health) {
-        return; // 跳到下一座塔
+        return; 
       }
 
       tower.lastAttackTime = elapsed;
@@ -530,7 +526,6 @@ function upgradeCastle() {
 
   currentGold.value -= CASTLE_UPGRADE_COST;
   playerMaxHealth.value += CASTLE_UPGRADE_AMOUNT;
-  // 同步回復部分生命
   playerHealth.value = Math.min(playerMaxHealth.value, playerHealth.value + CASTLE_UPGRADE_AMOUNT);
 
   console.log(`已花費 ${CASTLE_UPGRADE_COST} 金 強化主堡，最大生命 +${CASTLE_UPGRADE_AMOUNT}`);
